@@ -84,6 +84,45 @@ function addressfield_get_address_fields($entity_type = '') {
 }
 
 /**
+ * Return a list of address fields.
+ *
+ * @param string $entity_type
+ *   The entity type to get the addressfields for. If empty, all
+ *   addressfields are returned.
+ *
+ * @return array
+ *   An array of addressfield fields.
+ */
+function addressfield_get_address_fields($entity_type = '') {
+  $fields = &drupal_static(__FUNCTION__ . '_' . $entity_type);
+  if (isset($fields)) {
+    return $fields;
+  }
+
+  // Get all field definitions in advance to save individual function calls to field_info_field().
+  $fields = field_info_fields();
+  foreach (field_info_instances($entity_type) as $field_name => $instance) {
+    $field = $fields[$field_name];
+    if (!isset($field['bundles'][$entity_type])) {
+      unset($fields[$field_name]);
+    }
+  }
+
+  // Get all addressfield fields.
+  $fields = array_filter(field_info_field_map(), 'addressfield_field_map_filter');
+  if (!empty($fields)) {
+    // Keep only the fields present on this entity_type to spare some
+    // iterations in the calling function.
+    foreach ($fields as $field_name => $field) {
+      if (!isset($field['bundles'][$entity_type])) {
+        unset($fields[$field_name]);
+      }
+    }
+  }
+  return $fields;
+}
+
+/**
  * Returns TRUE if a field map array value represents an addressfield.
  *
  * Provided for use as a callback by array_filter().
@@ -93,7 +132,92 @@ function addressfield_field_map_filter($field) {
 }
 
 /**
- * Get the list of format plugins.
+ * Implements hook_addressfield_format_info().
+ */
+function addressfield_addressfield_format_info() {
+  return array(
+    'address' => array(
+      'title' => t('Show the address form (country-specific)'),
+      'format callback' => 'addressfield_format_address_generate',
+      'type' => 'address',
+      'weight' => -100,
+      'file' => 'formats/address.inc',
+    ),
+    'address_hide_country' => array(
+      'title' => t('Hide country field (when only one is available)'),
+      'format callback' => 'addressfield_format_address_hide_country',
+      'type' => 'address',
+      'weight' => -90,
+      'file' => 'formats/address-hide-country.inc',
+    ),
+    'address_hide_postal_code' => array(
+      'title' => t('Hide postal code field (Zip)'),
+      'format callback' => 'addressfield_format_address_hide_postal_code',
+      'type' => 'address',
+      'weight' => -85,
+      'file' => 'formats/address-hide-potal-code.inc',
+    ),
+    'address_hide_administrative_area' => array(
+      'title' => t('Hide administrative area field (State/Province)'),
+      'format callback' => 'addressfield_format_address_hide_administrative_area',
+      'type' => 'address',
+      'weight' => -84,
+      'file' => 'formats/address-hide-administrative-area.inc',
+    ),
+    'address_hide_locality' => array(
+      'title' => t('Hide locality field (City)'),
+      'format callback' => 'addressfield_format_address_hide_locality',
+      'type' => 'address',
+      'weight' => -84,
+      'file' => 'formats/address-hide-locality.inc',
+    ),
+    'address_hide_street' => array(
+      'title' => t('Hide 1st street address field (Address/locality)'),
+      'format callback' => 'addressfield_format_address_hide_street',
+      'type' => 'address',
+      'weight' => -83,
+      'file' => 'formats/address-hide-street.inc',
+    ),
+    'address_hide_street_two' => array(
+      'title' => t('Hide 2nd street address field (Address 2/premise)'),
+      'format callback' => 'addressfield_format_address_hide_premise',
+      'type' => 'address',
+      'weight' => -82,
+      'file' => 'formats/address-hide-premise.inc',
+    ),
+    'name_oneline' => array(
+      'title' => t('Show a Full Name field'),
+      'format callback' => 'addressfield_format_name_oneline_generate',
+      'type' => 'name',
+      'weight' => 0,
+      'file' => 'formats/name-oneline.inc',
+    ),
+    'name_full' => array(
+      'title' => t('Show First & Last name fields)'),
+      'format callback' => 'addressfield_format_name_full_generate',
+      'type' => 'name',
+      'weight' => 0,
+      'file' => 'formats/name-full.inc',
+    ),
+    'organisation' => array(
+      'title' => t('Show Company/Organization field'),
+      'format callback' => 'addressfield_format_organisation_generate',
+      'type' => 'organisation',
+      'weight' => -10,
+      'file' => 'formats/organisation.inc',
+    ),
+    'address_optional' => array(
+      'title' => t('Make all fields optional (No validation - unsuitable for postal purposes)'),
+      'format callback' => 'addressfield_format_address_optional',
+      'type' => 'address',
+      'weight' => 100,
+      'file' => 'formats/address-optional.inc',
+    ),
+  );
+}
+
+/**
+ * Get the sorted list of format plugins.
  */
 function addressfield_format_plugins() {
   ctools_include('plugins');
@@ -320,7 +444,78 @@ function addressfield_theme() {
   $hooks['addressfield_container'] = array(
     'render element' => 'element',
   );
+  $hooks['addressfield_address'] = array(
+    'variables' => array('country' => NULL,
+      'administrative_area' => NULL,
+      'sub_administrative_area' => NULL,
+      'locality' => NULL,
+      'dependent_locality' => NULL,
+      'postal_code' => NULL,
+      'thoroughfare' => NULL,
+      'premise' => NULL,
+      'sub_premise' => NULL,
+      'organisation_name' => NULL,
+      'name_line' => NULL,
+      'first_name' => NULL,
+      'last_name' => NULL,
+      'data' => NULL,
+      'entity_type' => NULL,
+      'entity' => NULL,
+      'field' => NULL,
+      'instance' => NULL,
+      'langcode' => NULL,
+      'display' => NULL,
+    ),
+  );
   return $hooks;
+}
+
+/**
+ * Theme function for rendering an address.
+ *
+ * This is an alternative to Addressfield's plugin system for formatters. To
+ * use this theme function with fields, you must select the "Theme function"
+ * formatter for the field's "Manage Display" settings.
+ *
+ * @param $variables
+ *   An array containing the addressfield sub-fields.
+ */
+function theme_addressfield_address($variables) {
+  // Make each sub-field available as its own variable.
+  extract($variables);
+
+  $output = '';
+  // Render street block
+  if ($thoroughfare || $premise) {
+    $output .= '<div class="street-block">';
+    if ($thoroughfare) {
+      $output .= '<div class="thoroughfare">' . check_plain($thoroughfare) . '</div>';
+    }
+    if ($premise) {
+      $output .= '<div class="premise">' . check_plain($premise) . '</div>';
+    }
+    $output .= '</div>';
+  }
+
+  // Render locality block
+  if ($locality || $administrative_area || $postal_code) {
+    $output .= '<div class="locality-block">';
+    if ($locality) {
+      $output .= '<span class="locality">' . check_plain($locality) . '</span>';
+    }
+    if ($locality && $administrative_area) {
+      $output .= ', ';
+    }
+    if ($administrative_area) {
+      $output .= ' <span class="state">' . check_plain($administrative_area) . '</span>';
+    }
+    if ($postal_code) {
+      $output .= ' <span class="postal-code">' . check_plain($postal_code) . '</span>';
+    }
+    $output .= '</div>';
+  }
+
+  return $output;
 }
 
 /**
@@ -635,6 +830,21 @@ function addressfield_field_widget_form(&$form, &$form_state, $field, $instance,
       'langcode' => $langcode,
       'delta' => $delta,
     );
+
+    // Try to get the entity from the form_state
+    if (!empty($form_state['build_info']['args'][0])) {
+      $context['entity'] = $form_state['build_info']['args'][0];
+      // Add what info we know about the entity type
+      if (count($field['entity_types']) == 1) {
+        $context['entity_type'] = $field['entity_types'][0];
+      }
+      else {
+        $context['entity_types'] = $field['entity_types'];
+      }
+    }
+
+    // Allow other modules to alter the handlers used.
+    drupal_alter('addressfield_handlers', $settings['format_handlers'], $address, $context);
     $element += addressfield_generate($address, $settings['format_handlers'], $context);
 
     // Remove any already saved default value.
@@ -722,6 +932,13 @@ function addressfield_field_formatter_info() {
         'format_handlers' => array('address'),
       ),
     ),
+    'addressfield_themeable' => array(
+      'label' => t('Theme function'),
+      'field types' => array('addressfield'),
+      'settings' => array(
+        'subformatter' => '',
+      ),
+    ),
   );
 }
 
@@ -729,6 +946,32 @@ function addressfield_field_formatter_info() {
  * Implements hook_field_formatter_settings_form().
  */
 function addressfield_field_formatter_settings_form($field, $instance, $view_mode, $form, &$form_state) {
+  $callback = '_addressfield_field_formatter_settings_form_' . $instance['display'][$view_mode]['type'];
+  if (is_callable($callback)) {
+    return $callback($field, $instance, $view_mode, $form, $form_state);
+  }
+}
+
+/**
+ * Field formatter settings form for addressfield_themeable.
+ */
+function _addressfield_field_formatter_settings_form_addressfield_themeable($field, $instance, $view_mode, $form, &$form_state) {
+  $display = $instance['display'][$view_mode];
+  $settings = $display['settings'];
+
+  $element['subformatter'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Subformatter'),
+    '#default_value' => $settings['subformatter'],
+  );
+
+  return $element;
+}
+
+/**
+ * Field formatter settings form for addressfield_default.
+ */
+function _addressfield_field_formatter_settings_form_addressfield_default($field, $instance, $view_mode, $form, &$form_state) {
   $display = $instance['display'][$view_mode];
   $settings = $display['settings'];
 
@@ -777,6 +1020,27 @@ function _addressfield_field_formatter_settings_form_validate($element, &$elemen
  * Implements hook_field_formatter_settings_summary().
  */
 function addressfield_field_formatter_settings_summary($field, $instance, $view_mode) {
+  $callback = '_addressfield_field_formatter_summary_' . $instance['display'][$view_mode]['type'];
+  if (is_callable($callback)) {
+    return $callback($field, $instance, $view_mode);
+  }
+}
+
+/**
+ * Field formatter summary for addressfield_themeable.
+ */
+function _addressfield_field_formatter_summary_addressfield_themeable($field, $instance, $view_mode) {
+  $display = $instance['display'][$view_mode];
+  $settings = $display['settings'];
+
+  $subformatter = !empty($settings['subformatter']) ? $settings['subformatter'] : '-';
+  return t('Subformatter') . ': ' . $subformatter;
+}
+
+/**
+ * Field formatter summary for addressfield_default.
+ */
+function _addressfield_field_formatter_summary_addressfield_default($field, $instance, $view_mode) {
   $display = $instance['display'][$view_mode];
   $settings = $display['settings'];
 
@@ -816,8 +1080,19 @@ function addressfield_field_formatter_view($entity_type, $entity, $field, $insta
           'instance' => $instance,
           'langcode' => $langcode,
           'delta' => $delta,
+          'entity_type' => $entity_type,
+          'entity' => $entity,
         );
+
+        // Allow other modules to alter the handlers used.
+        drupal_alter('addressfield_handlers', $handlers, $address, $context);
         $element[$delta] = addressfield_generate($address, $handlers, $context);
+      }
+      break;
+    case 'addressfield_themeable':
+      $entity_info = compact('entity_type', 'entity', 'field', 'instance', 'langcode', 'display');
+      foreach ($items as $delta => $item) {
+        $element[$delta] = array('#markup' => theme('addressfield_address', $item + $entity_info));
       }
       break;
   }
@@ -948,4 +1223,25 @@ function _addressfield_country_options_list($field = NULL, $instance = NULL) {
   }
 
   return $countries;
+}
+
+/**
+ * Returns the format callback for the specified handler.
+ *
+ * @param $handler
+ *   The format handler of the callback.
+ * @param $formats
+ *   All Format information as returned from hook_addressfield_format_infos().
+ */
+function _addressfield_get_format_callback($handler, $formats) {
+  if (array_key_exists($handler, $formats) && array_key_exists('format callback', $formats[$handler])) {
+    $function = $formats[$handler]['format callback'];
+    if (array_key_exists('file', $formats[$handler])) {
+      $file = str_replace('.inc', '', $formats[$handler]['file']);
+      module_load_include('inc', 'addressfield', $file);
+    }
+    if (function_exists($function)) {
+      return $function;
+    }
+  }
 }
